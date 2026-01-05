@@ -11,17 +11,21 @@ RUN apt-get update && apt-get install -y \
 # Копирование зависимостей
 COPY requirements.txt .
 
-# Установка Python зависимостей
-RUN pip install --no-cache-dir -r requirements.txt
+# Обновление pip и установка зависимостей
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
 
 # Копирование исходного кода
 COPY . .
 
-# Создание директории для базы данных
+# Создание директорий
 RUN mkdir -p data logs
 
-# Установка прав на запись
+# Установка прав
 RUN chmod -R 777 data logs
+
+# Порт (опционально, для health checks)
+EXPOSE 8080
 
 # Запуск приложения
 CMD ["python", "bot.py"]
