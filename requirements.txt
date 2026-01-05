@@ -1,11 +1,19 @@
+# Основные зависимости
 aiogram==3.10.0
 openai==1.12.0
 python-dotenv==1.0.0
 loguru==0.7.2
+
+# Для работы с сетью и асинхронностью
 aiohttp==3.9.1
+aiofiles==23.2.1
+
+# База данных
 sqlalchemy==2.0.25
-alembic==1.13.1
+
+# Валидация настроек
 pydantic==2.5.3
 pydantic-settings==2.1.0
-aiofiles==23.2.1  # Исправлено на версию, совместимую с aiogram
-python-multipart==0.0.6
+
+# Опционально (можно убрать если не нужны миграции)
+alembic==1.13.1
