@@ -1,132 +1,184 @@
-import json
-from typing import List, Optional, Dict, Any
-from openai import OpenAI, APIConnectionError, APIError, RateLimitError
+import asyncio
+from typing import List, Dict, Any, Optional, Tuple
 from loguru import logger
 
 from config.settings import settings
 from utils.fallback_generator import fallback_generator
 
+# Импорты провайдеров (с обработкой ошибок импорта)
+try:
+    from services.openai_provider import openai_provider
+    OPENAI_AVAILABLE = True
+except ImportError:
+    OPENAI_AVAILABLE = False
+    logger.warning("OpenAI провайдер не доступен")
+
+try:
+    from services.openrouter_provider import openrouter_provider
+    OPENROUTER_AVAILABLE = True
+except ImportError:
+    OPENROUTER_AVAILABLE = False
+    logger.warning("OpenRouter провайдер не доступен")
+
+try:
+    from services.together_provider import together_provider
+    TOGETHER_AVAILABLE = True
+except ImportError:
+    TOGETHER_AVAILABLE = False
+    logger.warning("Together AI провайдер не доступен")
+
+
 class AIGenerator:
-    """Класс для генерации комплиментов с использованием OpenAI API"""
+    """Универсальный генератор с поддержкой всех провайдеров"""
     
     def __init__(self):
-        self.client = None
-        self.use_openai = bool(settings.OPENAI_API_KEY)
+        self.providers: List[Tuple[str, Any]] = []
+        self._init_providers()
+        logger.info(f"Инициализированы провайдеры: {[p[0] for p in self.providers]}")
+    
+    def _init_providers(self):
+        """Инициализирует провайдеры в порядке приоритета"""
         
-        if self.use_openai:
-            try:
-                self.client = OpenAI(api_key=settings.OPENAI_API_KEY)
-                logger.info("OpenAI клиент инициализирован")
-            except Exception as e:
-                logger.error(f"Ошибка инициализации OpenAI: {e}")
-                self.use_openai = False
+        # Определяем порядок приоритета из настроек
+        priority_order = getattr(settings, 'AI_PROVIDER_PRIORITY', 
+                               ['openrouter', 'openai', 'together', 'fallback'])
         
-        self.compliment_types = {
-            "appearance": "комплимент о внешности",
-            "character": "комплимент о характере и личных качествах",
-            "achievements": "комплимент о достижениях и успехах"
-        }
+        # Словарь доступных провайдеров
+        available_providers = {}
+        
+        # OpenRouter
+        if (OPENROUTER_AVAILABLE and 
+            settings.OPENROUTER_API_KEY and 
+            openrouter_provider.is_available()):
+            available_providers['openrouter'] = openrouter_provider
+        
+        # OpenAI
+        if (OPENAI_AVAILABLE and 
+            settings.OPENAI_API_KEY and 
+            openai_provider.is_available()):
+            available_providers['openai'] = openai_provider
+        
+        # Together AI
+        if (TOGETHER_AVAILABLE and 
+            settings.TOGETHER_API_KEY and 
+            settings.USE_TOGETHER_AI and 
+            together_provider.is_available()):
+            available_providers['together'] = together_provider
+        
+        # Fallback (всегда доступен)
+        available_providers['fallback'] = fallback_generator
+        
+        # Сортируем провайдеры по приоритету
+        for provider_name in priority_order:
+            if provider_name in available_providers:
+                self.providers.append((provider_name, available_providers[provider_name]))
+                logger.info(f"Добавлен провайдер: {provider_name}")
+        
+        # Если нет провайдеров, добавляем только fallback
+        if len(self.providers) == 0:
+            self.providers.append(('fallback', fallback_generator))
+            logger.warning("Нет доступных AI провайдеров, использую только fallback")
     
     async def generate_compliment(self,
                                  message_text: str,
                                  history: List[Dict[str, Any]],
                                  compliment_type: Optional[str] = None) -> str:
         """
-        Генерирует персонализированный комплимент для Оли
+        Генерирует комплимент, пробуя провайдеров по очереди
         
         Args:
             message_text: текущее сообщение пользователя
             history: история диалога
-            compliment_type: желаемый тип комплимента
-        
+            compliment_type: тип комплимента
+            
         Returns:
             Сгенерированный комплимент
         """
-        # Используем OpenAI если доступно
-        if self.use_openai and self.client:
+        
+        # Статистика использования
+        stats = {"attempts": 0, "success": False}
+        
+        for provider_name, provider in self.providers:
+            stats["attempts"] += 1
+            
             try:
-                return await self._generate_with_openai(message_text, history, compliment_type)
-            except (APIConnectionError, APIError, RateLimitError) as e:
-                logger.error(f"Ошибка OpenAI API: {e}")
-                logger.info("Использую fallback генератор")
+                logger.debug(f"Пробую генерацию через {provider_name}")
+                
+                if provider_name == 'fallback':
+                    # Fallback генератор синхронный
+                    compliment = provider.generate_compliment(
+                        compliment_type=compliment_type,
+                        context=[msg["text"] for msg in history[-5:]]
+                    )
+                else:
+                    # AI провайдеры асинхронные
+                    compliment = await provider.generate_compliment(
+                        message_text=message_text,
+                        history=history,
+                        compliment_type=compliment_type
+                    )
+                
+                logger.info(f"✅ Успешная генерация через {provider_name}")
+                stats["success"] = True
+                stats["provider"] = provider_name
+                
+                # Сохраняем статистику
+                self._log_statistics(stats, provider_name, compliment)
+                
+                return compliment
+                
             except Exception as e:
-                logger.error(f"Неожиданная ошибка: {e}")
+                logger.warning(f"❌ Провайдер {provider_name} не сработал: {str(e)[:100]}")
+                
+                # Если это не последний провайдер, пробуем следующий
+                if provider_name != self.providers[-1][0]:
+                    logger.info(f"Пробую следующий провайдер...")
+                    continue
+                else:
+                    # Если это последний провайдер (fallback), то он не должен падать
+                    if provider_name == 'fallback':
+                        logger.error("Даже fallback генератор не сработал!")
+                        raise
         
-        # Fallback на локальный генератор
-        return self._generate_fallback(message_text, history, compliment_type)
+        # Если дошли сюда, что-то пошло не так
+        logger.error("Все провайдеры провалились")
+        return "Оля, ты сегодня прекрасна! 💖"
     
-    async def _generate_with_openai(self,
-                                   message_text: str,
-                                   history: List[Dict[str, Any]],
-                                   compliment_type: Optional[str] = None) -> str:
-        """Генерация комплимента с использованием OpenAI"""
-        
-        # Формируем системный промпт
-        system_prompt = """Ты - друг, который умеет делать красивые, искренние и персонализированные комплименты 
-        девушке по имени Оля. Твои комплименты должны быть:
-        1. Персонализированными с учетом контекста разговора
-        2. Искренними и естественными
-        3. Теплыми и доброжелательными
-        4. Не слишком длинными (1-3 предложения)
-        
-        Всегда обращайся к Оле по имени и используй местоимение "ты".
-        Избегай шаблонных фраз, делай комплименты уникальными."""
-        
-        # Добавляем информацию о типе комплимента
-        if compliment_type and compliment_type in self.compliment_types:
-            system_prompt += f"\n\nПользователь хочет получить {self.compliment_types[compliment_type]}."
-        
-        # Формируем историю диалога для контекста
-        messages = [{"role": "system", "content": system_prompt}]
-        
-        # Добавляем историю диалога (последние N сообщений)
-        for msg in history[-settings.CONTEXT_MEMORY_SIZE:]:
-            role = "assistant" if msg["is_bot"] else "user"
-            messages.append({"role": role, "content": msg["text"]})
-        
-        # Добавляем текущее сообщение
-        messages.append({"role": "user", "content": message_text})
-        
-        # Делаем запрос к OpenAI
-        try:
-            response = self.client.chat.completions.create(
-                model=settings.OPENAI_MODEL,
-                messages=messages,
-                temperature=settings.OPENAI_TEMPERATURE,
-                max_tokens=150,
-                n=1
-            )
-            
-            compliment = response.choices[0].message.content.strip()
-            
-            # Убедимся, что обращаемся к Оле
-            if not any(name in compliment.lower() for name in ["оля", "оленька", "олечка"]):
-                compliment = f"Оля, {compliment.lower()}"
-            
-            logger.debug(f"Сгенерирован комплимент через OpenAI: {compliment[:50]}...")
-            return compliment
-            
-        except Exception as e:
-            logger.error(f"Ошибка при запросе к OpenAI: {e}")
-            raise
-    
-    def _generate_fallback(self,
-                          message_text: str,
-                          history: List[Dict[str, Any]],
-                          compliment_type: Optional[str] = None) -> str:
-        """Генерация комплимента через fallback систему"""
-        
-        # Извлекаем текст последних сообщений для контекста
-        context_texts = [msg["text"] for msg in history[-5:]]
-        
-        # Генерируем комплимент через fallback генератор
-        compliment = fallback_generator.generate_compliment(
-            compliment_type=compliment_type,
-            context=context_texts
+    def _log_statistics(self, stats: Dict, provider_name: str, compliment: str):
+        """Логирует статистику использования"""
+        logger.info(
+            f"📊 Статистика генерации | "
+            f"Попыток: {stats['attempts']} | "
+            f"Провайдер: {provider_name} | "
+            f"Длина: {len(compliment)} chars"
         )
+    
+    def get_available_providers(self) -> List[str]:
+        """Возвращает список доступных провайдеров"""
+        return [name for name, _ in self.providers]
+    
+    def get_provider_info(self) -> Dict[str, Any]:
+        """Возвращает информацию о всех провайдерах"""
+        info = {}
         
-        logger.debug(f"Сгенерирован fallback комплимент: {compliment[:50]}...")
-        return compliment
+        for name, provider in self.providers:
+            if name == 'fallback':
+                info[name] = {
+                    'type': 'local',
+                    'status': 'available',
+                    'description': 'Локальный шаблонный генератор'
+                }
+            elif hasattr(provider, 'get_info'):
+                info[name] = provider.get_info()
+            else:
+                info[name] = {
+                    'type': 'api',
+                    'status': 'available',
+                    'description': f'{name.capitalize()} API провайдер'
+                }
+        
+        return info
 
-# Создаем глобальный экземпляр генератора
+
+# Глобальный экземпляр
 ai_generator = AIGenerator()
