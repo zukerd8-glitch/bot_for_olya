@@ -1,4 +1,6 @@
 import asyncio
+import signal
+import sys
 from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage
 from loguru import logger
@@ -7,6 +9,7 @@ from config.settings import settings
 from database.models import init_db
 from handlers import commands, compliments, errors
 from utils.logger import logger as app_logger
+
 
 async def main():
     """Основная функция запуска бота"""
@@ -40,10 +43,22 @@ async def main():
     # Запуск поллинга
     await dp.start_polling(bot)
 
+
+def shutdown_handler(sig, frame):
+    """Обработчик сигналов завершения"""
+    logger.info(f"Получен сигнал {sig}, завершаю работу...")
+    sys.exit(0)
+
+
 if __name__ == "__main__":
+    # Регистрация обработчиков сигналов
+    signal.signal(signal.SIGINT, shutdown_handler)
+    signal.signal(signal.SIGTERM, shutdown_handler)
+    
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
         logger.info("Бот остановлен пользователем")
     except Exception as e:
         logger.error(f"Критическая ошибка: {e}")
+        sys.exit(1)
