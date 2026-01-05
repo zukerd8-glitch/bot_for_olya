@@ -1,4 +1,4 @@
-# Core dependencies
+# Core
 aiogram==3.10.0
 openai==1.12.0
 python-dotenv==1.0.0
@@ -7,12 +7,9 @@ loguru==0.7.2
 # Database
 sqlalchemy==2.0.25
 
-# Pydantic (используем версии с pre-built wheels)
-pydantic==2.5.3
-pydantic-core==2.14.6
-pydantic-settings==2.1.0
+# Config (используем старую версию pydantic без Rust)
+pydantic==1.10.13
+pydantic-settings==2.0.3
 
 # HTTP
 aiohttp==3.9.1
-
-# Async files (убрали, т.к. уже в зависимостях aiogram)
