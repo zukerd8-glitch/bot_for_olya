@@ -1,15 +1,9 @@
-# Core
-aiogram==3.10.0
-openai==1.12.0
+# Стабильные версии с pre-built wheels
+aiogram==3.8.0
+openai==1.3.8
 python-dotenv==1.0.0
 loguru==0.7.2
-
-# Database
-sqlalchemy==2.0.25
-
-# Config (используем старую версию pydantic без Rust)
+aiohttp==3.8.6
+sqlalchemy==2.0.23
 pydantic==1.10.13
 pydantic-settings==2.0.3
-
-# HTTP
-aiohttp==3.9.1
