@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: olya-compliments-bot
+    runtime: python
+    buildCommand: "./build.sh"
+    startCommand: "./start.sh"
+    envVars:
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: DATABASE_URL
+        value: sqlite:///./data/olya_bot.db
+      - key: CONTEXT_MEMORY_SIZE
+        value: 10
+      - key: AI_PROVIDER_PRIORITY
+        value: openrouter,fallback
+    disk:
+      name: data
+      mountPath: /opt/render/project/src/data
+      sizeGB: 1
