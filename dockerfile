@@ -2,30 +2,28 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Установка системных зависимостей
+# Устанавливаем Rust (необходимо для сборки pydantic-core)
 RUN apt-get update && apt-get install -y \
     gcc \
     g++ \
+    curl \
+    build-essential \
+    && curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y \
+    && export PATH="$HOME/.cargo/bin:$PATH" \
     && rm -rf /var/lib/apt/lists/*
 
-# Копирование зависимостей
+# Копируем зависимости
 COPY requirements.txt .
 
-# Обновление pip и установка зависимостей
+# Устанавливаем Python зависимости
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
-# Копирование исходного кода
+# Копируем исходный код
 COPY . .
 
-# Создание директорий
-RUN mkdir -p data logs
+# Создаем директории
+RUN mkdir -p data logs && chmod -R 777 data logs
 
-# Установка прав
-RUN chmod -R 777 data logs
-
-# Порт (опционально, для health checks)
-EXPOSE 8080
-
-# Запуск приложения
+# Запускаем бота
 CMD ["python", "bot.py"]
